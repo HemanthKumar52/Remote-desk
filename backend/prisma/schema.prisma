@@ -1,0 +1,285 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String              @id @default(uuid())
+  email             String              @unique
+  passwordHash      String
+  twoFactorSecret   String?
+  twoFactorEnabled  Boolean             @default(false)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  devices           Device[]
+  deviceGroups      DeviceGroup[]
+  addressBook       AddressBookEntry[]
+  auditLogs         AuditLog[]
+  sessionRecordings SessionRecording[]
+}
+
+model Device {
+  id                  String              @id @default(uuid())
+  userId              String
+  user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceName          String
+  platform            String              // windows, macos, android, ios, linux
+  deviceUniqueId      String              @unique
+  macAddress          String?             // For Wake-on-LAN
+  localIp             String?
+  lastActive          DateTime            @default(now())
+  isOnline            Boolean             @default(false)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Unattended Access
+  unattendedEnabled   Boolean             @default(false)
+  unattendedPassword  String?             // Hashed password for unattended access
+
+  // System Info (cached)
+  osVersion           String?
+  cpuInfo             String?
+  ramTotal            Int?                // in MB
+
+  // Relations
+  hostSessions        Session[]           @relation("HostDevice")
+  clientSessions      Session[]           @relation("ClientDevice")
+  pairCodes           PairCode[]
+  groupMemberships    DeviceGroupMember[]
+  addressBookEntries  AddressBookEntry[]  @relation("TargetDevice")
+  auditLogs           AuditLog[]
+
+  @@index([userId])
+  @@index([isOnline])
+}
+
+model DeviceGroup {
+  id          String              @id @default(uuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  color       String              @default("#007AFF")
+  icon        String              @default("folder")
+  parentId    String?
+  parent      DeviceGroup?        @relation("GroupHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children    DeviceGroup[]       @relation("GroupHierarchy")
+  members     DeviceGroupMember[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@index([parentId])
+}
+
+model DeviceGroupMember {
+  id        String      @id @default(uuid())
+  groupId   String
+  group     DeviceGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  deviceId  String
+  device    Device      @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+
+  @@unique([groupId, deviceId])
+  @@index([groupId])
+  @@index([deviceId])
+}
+
+model AddressBookEntry {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetDeviceId String
+  targetDevice   Device   @relation("TargetDevice", fields: [targetDeviceId], references: [id], onDelete: Cascade)
+  alias          String?  // Custom name for the device
+  notes          String?
+  isFavorite     Boolean  @default(false)
+  lastConnected  DateTime?
+  connectCount   Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, targetDeviceId])
+  @@index([userId])
+  @@index([isFavorite])
+}
+
+model Session {
+  id               String             @id @default(uuid())
+  hostDeviceId     String
+  hostDevice       Device             @relation("HostDevice", fields: [hostDeviceId], references: [id], onDelete: Cascade)
+  clientDeviceId   String?
+  clientDevice     Device?            @relation("ClientDevice", fields: [clientDeviceId], references: [id], onDelete: SetNull)
+  status           String             @default("pending") // pending, active, paused, ended
+  startedAt        DateTime           @default(now())
+  endedAt          DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  // Session Permissions
+  permissions      SessionPermission?
+
+  // Quality Settings
+  qualityPreset    String             @default("auto") // auto, low, medium, high, ultra
+  maxFps           Int                @default(30)
+  maxBitrate       Int                @default(5000) // kbps
+
+  // Multi-monitor
+  selectedMonitor  Int                @default(0) // -1 for all monitors
+
+  // Recording
+  isRecording      Boolean            @default(false)
+  recordings       SessionRecording[]
+
+  // Chat messages
+  chatMessages     ChatMessage[]
+
+  // Annotations
+  annotations      Annotation[]
+
+  @@index([hostDeviceId])
+  @@index([clientDeviceId])
+  @@index([status])
+}
+
+model SessionPermission {
+  id                  String   @id @default(uuid())
+  sessionId           String   @unique
+  session             Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  // Input Permissions
+  allowKeyboard       Boolean  @default(true)
+  allowMouse          Boolean  @default(true)
+  allowClipboard      Boolean  @default(true)
+  allowFileTransfer   Boolean  @default(true)
+
+  // Control Permissions
+  allowRestart        Boolean  @default(false)
+  allowShutdown       Boolean  @default(false)
+  allowProcessKill    Boolean  @default(false)
+  allowCommandExec    Boolean  @default(false)
+
+  // View Permissions
+  viewOnly            Boolean  @default(false)
+  allowMultiMonitor   Boolean  @default(true)
+  allowRecording      Boolean  @default(false)
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model SessionRecording {
+  id          String   @id @default(uuid())
+  sessionId   String
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileName    String
+  filePath    String
+  fileSize    Int      // in bytes
+  duration    Int      // in seconds
+  format      String   @default("webm")
+  thumbnailPath String?
+  startedAt   DateTime
+  endedAt     DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([userId])
+}
+
+model ChatMessage {
+  id          String   @id @default(uuid())
+  sessionId   String
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  senderDeviceId String
+  content     String
+  messageType String   @default("text") // text, file, system
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
+model Annotation {
+  id          String   @id @default(uuid())
+  sessionId   String
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  creatorDeviceId String
+  type        String   // freehand, arrow, rectangle, ellipse, text, highlight
+  color       String   @default("#FF0000")
+  strokeWidth Int      @default(3)
+  points      String   // JSON array of points
+  text        String?  // For text annotations
+  isVisible   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId])
+}
+
+model PairCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  deviceId  String
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([code])
+  @@index([deviceId])
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId    String?
+  device      Device?  @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  action      String   // login, logout, session_start, session_end, file_transfer, etc.
+  details     String?  // JSON details
+  ipAddress   String?
+  userAgent   String?
+  success     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([deviceId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model ConnectionStats {
+  id            String   @id @default(uuid())
+  sessionId     String
+  timestamp     DateTime @default(now())
+  latency       Int      // ms
+  bandwidth     Int      // kbps
+  packetLoss    Float    // percentage
+  fps           Int
+  resolution    String   // e.g., "1920x1080"
+  cpuUsage      Float    // percentage on host
+  memoryUsage   Float    // percentage on host
+
+  @@index([sessionId])
+  @@index([timestamp])
+}
+
+model WakeOnLanRequest {
+  id          String   @id @default(uuid())
+  targetMac   String
+  targetIp    String?
+  requestedBy String   // userId
+  status      String   @default("pending") // pending, sent, success, failed
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  @@index([targetMac])
+  @@index([status])
+}
